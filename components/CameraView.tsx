@@ -1,21 +1,24 @@
 "use client";
 
-export default function CameraView() {
+type CameraViewProps = {
+  videoRef: React.RefObject<HTMLVideoElement | null>;
+};
+
+export default function CameraView({ videoRef }: CameraViewProps) {
   return (
-    <div
+    <video
+      ref={videoRef}
+      autoPlay
+      playsInline
+      muted
       style={{
         position: "absolute",
         inset: 0,
-        background:
-          "linear-gradient(180deg, rgba(40,40,40,1) 0%, rgba(10,10,10,1) 100%)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        color: "#888888",
-        fontSize: "18px",
+        width: "100%",
+        height: "100%",
+        objectFit: "cover",
+        background: "#000",
       }}
-    >
-      Camera area
-    </div>
+    />
   );
 }
