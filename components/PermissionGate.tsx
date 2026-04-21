@@ -15,57 +15,74 @@ export default function PermissionGate({
   error,
   onStart,
 }: PermissionGateProps) {
-  if (isReady) {
-    return <>{children}</>;
-  }
-
   return (
-    <div
-      style={{
-        width: "100vw",
-        height: "100vh",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: "24px",
-        background: "#000",
-        color: "#fff",
-      }}
-    >
-      <div
-        style={{
-          maxWidth: "420px",
-          width: "100%",
-          padding: "24px",
-          borderRadius: "18px",
-          background: "rgba(255,255,255,0.08)",
-          textAlign: "center",
-        }}
-      >
-        <h2 style={{ marginTop: 0 }}>カメラを開始</h2>
-        <p style={{ color: "#ccc", lineHeight: 1.6 }}>
-          背面カメラを使って黒い四角マーカーを検出します。
-          白地の上に黒い四角形を表示して試してください。
-        </p>
+    <>
+      {children}
 
-        {error && (
-          <p style={{ color: "#ff8f8f", lineHeight: 1.6 }}>{error}</p>
-        )}
-
-        <button
-          onClick={onStart}
-          disabled={isStarting}
+      {!isReady && (
+        <div
           style={{
-            border: 0,
-            borderRadius: "12px",
-            padding: "14px 20px",
-            fontWeight: 700,
-            cursor: "pointer",
+            position: "absolute",
+            inset: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "24px",
+            background: "rgba(0,0,0,0.72)",
+            color: "#fff",
+            zIndex: 20,
           }}
         >
-          {isStarting ? "起動中..." : "カメラを許可して開始"}
-        </button>
-      </div>
-    </div>
+          <div
+            style={{
+              maxWidth: "420px",
+              width: "100%",
+              padding: "24px",
+              borderRadius: "18px",
+              background: "rgba(20,20,20,0.95)",
+              textAlign: "center",
+            }}
+          >
+            <h2 style={{ marginTop: 0 }}>カメラを開始</h2>
+
+            <p style={{ color: "#ccc", lineHeight: 1.6 }}>
+              背面カメラを使って黒い四角マーカーを検出します。
+              白地の上に黒い四角形を表示して試してください。
+            </p>
+
+            {error && (
+              <div
+                style={{
+                  marginBottom: "16px",
+                  padding: "12px",
+                  borderRadius: "12px",
+                  background: "rgba(255,0,0,0.12)",
+                  color: "#ff9b9b",
+                  fontSize: "14px",
+                  lineHeight: 1.6,
+                  wordBreak: "break-word",
+                }}
+              >
+                {error}
+              </div>
+            )}
+
+            <button
+              onClick={onStart}
+              disabled={isStarting}
+              style={{
+                border: 0,
+                borderRadius: "12px",
+                padding: "14px 20px",
+                fontWeight: 700,
+                cursor: "pointer",
+              }}
+            >
+              {isStarting ? "起動中..." : "カメラを許可して開始"}
+            </button>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
