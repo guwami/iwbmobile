@@ -106,23 +106,6 @@ export default function OverlayUI({ pose }: OverlayUIProps) {
         )}
       </svg>
 
-      {pose.markers.map((m, index) => (
-        <div
-          key={index}
-          style={{
-            position: "absolute",
-            left: m.center.x - m.width / 2,
-            top: m.center.y - m.height / 2,
-            width: m.width,
-            height: m.height,
-            border: "3px solid #00d2ff",
-            borderRadius: 8,
-            boxSizing: "border-box",
-            zIndex: 4,
-          }}
-        />
-      ))}
-
       {pose.screenPoint && (
         <div
           style={{
@@ -211,7 +194,7 @@ export default function OverlayUI({ pose }: OverlayUIProps) {
       >
         {pose.detected
           ? `mode=${pose.mode} x=${pose.screenPoint?.x.toFixed(2)} y=${pose.screenPoint?.y.toFixed(2)} d=${pose.distanceScore.toFixed(3)} features=${pose.trackedFeatureCount}`
-          : "4隅マーカーを画面に入れてください"}
+          : "ディスプレイ全体を画面に入れてください"}
       </div>
     </div>
   );

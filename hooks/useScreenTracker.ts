@@ -1,18 +1,17 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { MarkerQuad, QuadPoint, ScreenPose } from "@/types/tracker";
+import type { QuadPoint, ScreenPose, ScreenRect } from "@/types/tracker";
 
 const EMPTY_POSE: ScreenPose = {
   detected: false,
   mode: "detecting",
-  corners: [],
-  screenCornersImage: [],
   screenPoint: null,
   distanceScore: 0,
   isNear: false,
-  markers: [],
+  screenCornersImage: [],
   trackedFeatureCount: 0,
+  screenRect: null,
 };
 
 function distance(a: QuadPoint, b: QuadPoint) {
@@ -33,12 +32,6 @@ function orderPoints(points: QuadPoint[]): QuadPoint[] {
   const top = sorted.slice(0, 2).sort((a, b) => a.x - b.x);
   const bottom = sorted.slice(2, 4).sort((a, b) => a.x - b.x);
   return [top[0], top[1], bottom[1], bottom[0]]; // TL, TR, BR, BL
-}
-
-function centroid(points: QuadPoint[]): QuadPoint {
-  const x = points.reduce((s, p) => s + p.x, 0) / points.length;
-  const y = points.reduce((s, p) => s + p.y, 0) / points.length;
-  return { x, y };
 }
 
 function homographyArrayFromMat(mat: any): number[] {
@@ -70,9 +63,10 @@ function pointsToMat(cv: any, points: QuadPoint[]) {
 function matToPoints(mat: any): QuadPoint[] {
   const points: QuadPoint[] = [];
   for (let i = 0; i < mat.rows; i++) {
-    const x = mat.data32F[i * 2];
-    const y = mat.data32F[i * 2 + 1];
-    points.push({ x, y });
+    points.push({
+      x: mat.data32F[i * 2],
+      y: mat.data32F[i * 2 + 1],
+    });
   }
   return points;
 }
@@ -98,7 +92,6 @@ export function useScreenTracker(
     }
 
     const cv = window.cv;
-
     const canvas = document.createElement("canvas");
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
@@ -136,38 +129,38 @@ export function useScreenTracker(
       return mask;
     };
 
-    const detectMarkersAndInitialize = (gray: any, src: any) => {
+    const detectScreenRect = (gray: any, src: any) => {
       const blur = new cv.Mat();
-      const thresh = new cv.Mat();
+      const edges = new cv.Mat();
       const contours = new cv.MatVector();
       const hierarchy = new cv.Mat();
 
-      const markers: MarkerQuad[] = [];
-
       try {
         cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
-        cv.threshold(blur, thresh, 90, 255, cv.THRESH_BINARY_INV);
+        cv.Canny(blur, edges, 60, 180);
 
         cv.findContours(
-          thresh,
+          edges,
           contours,
           hierarchy,
           cv.RETR_EXTERNAL,
           cv.CHAIN_APPROX_SIMPLE
         );
 
+        let bestRect: ScreenRect | null = null;
+
         for (let i = 0; i < contours.size(); i++) {
           const cnt = contours.get(i);
           const area = cv.contourArea(cnt);
 
-          if (area < 300) {
+          if (area < src.cols * src.rows * 0.04) {
             cnt.delete();
             continue;
           }
 
           const peri = cv.arcLength(cnt, true);
           const approx = new cv.Mat();
-          cv.approxPolyDP(cnt, approx, 0.04 * peri, true);
+          cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
 
           if (approx.rows === 4 && cv.isContourConvex(approx)) {
             const points: QuadPoint[] = [];
@@ -178,7 +171,7 @@ export function useScreenTracker(
             }
 
             const ordered = orderPoints(points);
-            const c = centroid(ordered);
+
             const width =
               (distance(ordered[0], ordered[1]) +
                 distance(ordered[3], ordered[2])) /
@@ -189,15 +182,22 @@ export function useScreenTracker(
               2;
 
             const aspect = width / height;
+            const rectArea = polygonArea(ordered);
+            const coverage = rectArea / (src.cols * src.rows);
 
-            if (aspect > 0.65 && aspect < 1.35) {
-              markers.push({
-                center: c,
-                corners: ordered,
-                area,
-                width,
-                height,
-              });
+            // 一般的なディスプレイ比にゆるく合わせる
+            const aspectOk = aspect > 1.1 && aspect < 2.4;
+            const sizeOk = coverage > 0.06;
+
+            if (aspectOk && sizeOk) {
+              if (!bestRect || rectArea > bestRect.area) {
+                bestRect = {
+                  corners: ordered,
+                  area: rectArea,
+                  width,
+                  height,
+                };
+              }
             }
           }
 
@@ -205,22 +205,15 @@ export function useScreenTracker(
           cnt.delete();
         }
 
-        markers.sort((a, b) => b.area - a.area);
-        const topMarkers = markers.slice(0, 4);
-
-        if (topMarkers.length < 4) {
+        if (!bestRect) {
           setPose({
             ...EMPTY_POSE,
-            markers: topMarkers,
             mode: "detecting",
           });
           return;
         }
 
-        const centers = topMarkers.map((m) => m.center);
-        const orderedCenters = orderPoints(centers);
-
-        const srcPts = pointsToMat(cv, orderedCenters);
+        const srcPts = pointsToMat(cv, bestRect.corners);
         const dstPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
           0, 0,
           1, 0,
@@ -237,17 +230,23 @@ export function useScreenTracker(
         };
 
         const screenPoint = applyHomographyToPoint(HArray, cameraCenter);
-        const screenArea = polygonArea(orderedCenters);
-        const distanceScore = screenArea / (src.cols * src.rows);
-        const isNear = distanceScore > 0.08;
+        const inside =
+          !!screenPoint &&
+          screenPoint.x >= 0 &&
+          screenPoint.x <= 1 &&
+          screenPoint.y >= 0 &&
+          screenPoint.y <= 1;
 
-        const mask = buildMaskFromQuad(gray, orderedCenters);
+        const distanceScore = bestRect.area / (src.cols * src.rows);
+        const isNear = distanceScore > 0.18;
+
+        const mask = buildMaskFromQuad(gray, bestRect.corners);
         const corners = new cv.Mat();
 
         cv.goodFeaturesToTrack(
           gray,
           corners,
-          60,
+          80,
           0.01,
           10,
           mask,
@@ -258,45 +257,28 @@ export function useScreenTracker(
 
         mask.delete();
 
-        if (corners.rows < 8) {
-          corners.delete();
-          srcPts.delete();
-          dstPts.delete();
-          H.delete();
+        if (corners.rows >= 8) {
+          if (prevGrayRef.current) prevGrayRef.current.delete();
+          prevGrayRef.current = gray.clone();
 
-          setPose({
-            detected: !!screenPoint,
-            mode: "detecting",
-            corners: orderedCenters,
-            screenCornersImage: orderedCenters,
-            screenPoint,
-            distanceScore,
-            isNear: !!screenPoint && isNear,
-            markers: topMarkers,
-            trackedFeatureCount: 0,
-          });
-          return;
+          if (prevPtsRef.current) prevPtsRef.current.delete();
+          prevPtsRef.current = corners.clone();
+
+          screenCornersRef.current = bestRect.corners;
+          modeRef.current = "tracking";
+        } else {
+          cleanupTracking();
         }
 
-        if (prevGrayRef.current) prevGrayRef.current.delete();
-        prevGrayRef.current = gray.clone();
-
-        if (prevPtsRef.current) prevPtsRef.current.delete();
-        prevPtsRef.current = corners.clone();
-
-        screenCornersRef.current = orderedCenters;
-        modeRef.current = "tracking";
-
         setPose({
-          detected: !!screenPoint,
-          mode: "tracking",
-          corners: orderedCenters,
-          screenCornersImage: orderedCenters,
-          screenPoint,
+          detected: inside,
+          mode: corners.rows >= 8 ? "tracking" : "detecting",
+          screenPoint: inside ? screenPoint : null,
           distanceScore,
-          isNear: !!screenPoint && isNear,
-          markers: topMarkers,
+          isNear: inside && isNear,
+          screenCornersImage: bestRect.corners,
           trackedFeatureCount: corners.rows,
+          screenRect: bestRect,
         });
 
         corners.delete();
@@ -305,7 +287,7 @@ export function useScreenTracker(
         H.delete();
       } finally {
         blur.delete();
-        thresh.delete();
+        edges.delete();
         contours.delete();
         hierarchy.delete();
       }
@@ -411,9 +393,9 @@ export function useScreenTracker(
           screenPoint.y >= 0 &&
           screenPoint.y <= 1;
 
-        const screenArea = polygonArea(trackedCorners);
-        const distanceScore = screenArea / (src.cols * src.rows);
-        const isNear = distanceScore > 0.08;
+        const rectArea = polygonArea(trackedCorners);
+        const distanceScore = rectArea / (src.cols * src.rows);
+        const isNear = distanceScore > 0.18;
 
         if (prevGrayRef.current) prevGrayRef.current.delete();
         prevGrayRef.current = gray.clone();
@@ -426,13 +408,19 @@ export function useScreenTracker(
         setPose({
           detected: inside,
           mode: "tracking",
-          corners: trackedCorners,
-          screenCornersImage: trackedCorners,
           screenPoint: inside ? screenPoint : null,
           distanceScore,
           isNear: inside && isNear,
-          markers: [],
+          screenCornersImage: trackedCorners,
           trackedFeatureCount: nextGood.length,
+          screenRect: {
+            corners: trackedCorners,
+            area: rectArea,
+            width: (distance(trackedCorners[0], trackedCorners[1]) +
+              distance(trackedCorners[3], trackedCorners[2])) / 2,
+            height: (distance(trackedCorners[0], trackedCorners[3]) +
+              distance(trackedCorners[1], trackedCorners[2])) / 2,
+          },
         });
 
         prevMat.delete();
@@ -478,11 +466,11 @@ export function useScreenTracker(
 
         frameCountRef.current += 1;
 
-        const forceRedetect =
+        const shouldRedetect =
           modeRef.current !== "tracking" || frameCountRef.current % 45 === 0;
 
-        if (forceRedetect) {
-          detectMarkersAndInitialize(gray, src);
+        if (shouldRedetect) {
+          detectScreenRect(gray, src);
         } else {
           trackScreen(gray, src);
         }
