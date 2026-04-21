@@ -1,34 +1,46 @@
-"use client";
+import Link from "next/link";
 
-import CameraView from "@/components/CameraView";
-import OverlayUI from "@/components/OverlayUI";
-import PermissionGate from "@/components/PermissionGate";
-import { useCamera } from "@/hooks/useCamera";
-import { useMarkerDetection } from "@/hooks/useMarkerDetection";
-
-export default function ARPage() {
-  const { videoRef, startCamera, isReady, isStarting, error } = useCamera();
-  const result = useMarkerDetection(videoRef, isReady);
-
+export default function HomePage() {
   return (
     <main
       style={{
-        position: "relative",
-        width: "100vw",
-        height: "100vh",
-        overflow: "hidden",
-        background: "#000",
+        minHeight: "100vh",
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: "center",
+        alignItems: "center",
+        gap: "24px",
+        padding: "24px",
+        textAlign: "center",
       }}
     >
-      <PermissionGate
-        isReady={isReady}
-        isStarting={isStarting}
-        error={error}
-        onStart={startCamera}
+      <h1 style={{ margin: 0, fontSize: "32px" }}>IWB Mobile AR</h1>
+
+      <p
+        style={{
+          margin: 0,
+          maxWidth: "460px",
+          lineHeight: 1.7,
+          color: "#cccccc",
+        }}
       >
-        <CameraView videoRef={videoRef} />
-        <OverlayUI result={result} />
-      </PermissionGate>
+        4隅マーカーからディスプレイ平面を推定し,
+        スマホが近づいた位置に付箋を置くプロトタイプです。
+      </p>
+
+      <Link
+        href="/ar"
+        style={{
+          display: "inline-block",
+          padding: "14px 22px",
+          borderRadius: "12px",
+          background: "#ffffff",
+          color: "#111111",
+          fontWeight: 700,
+        }}
+      >
+        AR画面を開く
+      </Link>
     </main>
   );
 }
