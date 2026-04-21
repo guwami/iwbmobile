@@ -1,4 +1,20 @@
-const saveSticky = async () => {
+"use client";
+
+import { useState } from "react";
+import { supabase } from "@/lib/supabase";
+import type { ScreenPose } from "@/types/tracker";
+
+type OverlayUIProps = {
+  pose: ScreenPose;
+};
+
+export default function OverlayUI({ pose }: OverlayUIProps) {
+  const [note, setNote] = useState("新しい付箋");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  
+  const saveSticky = async () => {
   if (!pose.screenPoint) return;
 
   if (!supabase) {
@@ -26,3 +42,144 @@ const saveSticky = async () => {
     setSaving(false);
   }
 };
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        inset: 0,
+      }}
+    >
+      <div
+        style={{
+          position: "absolute",
+          top: 16,
+          left: 16,
+          right: 16,
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          padding: "12px 16px",
+          borderRadius: 14,
+          background: "rgba(0,0,0,0.45)",
+          color: "#fff",
+          backdropFilter: "blur(8px)",
+          zIndex: 5,
+        }}
+      >
+        <span>IWB Mobile AR</span>
+        <span style={{ color: pose.isNear ? "#8fff8f" : "#ffd27a" }}>
+          {pose.isNear ? "near" : pose.detected ? "detected" : "searching"}
+        </span>
+      </div>
+
+      {pose.markers.map((m, index) => (
+        <div
+          key={index}
+          style={{
+            position: "absolute",
+            left: m.center.x - m.width / 2,
+            top: m.center.y - m.height / 2,
+            width: m.width,
+            height: m.height,
+            border: "3px solid #00d2ff",
+            borderRadius: 8,
+            boxSizing: "border-box",
+            zIndex: 4,
+          }}
+        />
+      ))}
+
+      {pose.screenPoint && (
+        <div
+          style={{
+            position: "absolute",
+            left: `${pose.screenPoint.x * 100}%`,
+            top: `${pose.screenPoint.y * 100}%`,
+            transform: "translate(-50%, -50%)",
+            width: 24,
+            height: 24,
+            borderRadius: "50%",
+            background: pose.isNear ? "#8fff8f" : "#ffd27a",
+            border: "3px solid rgba(255,255,255,0.8)",
+            zIndex: 6,
+          }}
+        />
+      )}
+
+      {pose.screenPoint && pose.isNear && (
+        <div
+          style={{
+            position: "absolute",
+            left: `${pose.screenPoint.x * 100}%`,
+            top: `${pose.screenPoint.y * 100}%`,
+            transform: "translate(-50%, -120%)",
+            width: 220,
+            padding: 14,
+            borderRadius: 16,
+            background: "#ffe97a",
+            color: "#222",
+            boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
+            zIndex: 7,
+          }}
+        >
+          <div style={{ fontWeight: 700, marginBottom: 8 }}>付箋候補</div>
+
+          <textarea
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            style={{
+              width: "100%",
+              minHeight: 80,
+              resize: "none",
+              borderRadius: 8,
+              border: "1px solid #ccc",
+              padding: 8,
+              marginBottom: 8,
+              boxSizing: "border-box",
+            }}
+          />
+
+          <button
+            onClick={saveSticky}
+            disabled={saving}
+            style={{
+              width: "100%",
+              border: 0,
+              borderRadius: 10,
+              padding: "10px 12px",
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            {saving ? "保存中..." : "Supabase に保存"}
+          </button>
+
+          {saved && (
+            <div style={{ marginTop: 8, fontSize: 13 }}>保存しました。</div>
+          )}
+        </div>
+      )}
+
+      <div
+        style={{
+          position: "absolute",
+          bottom: 18,
+          left: "50%",
+          transform: "translateX(-50%)",
+          padding: "10px 16px",
+          borderRadius: 999,
+          background: "rgba(0,0,0,0.45)",
+          color: "#fff",
+          fontSize: 14,
+          backdropFilter: "blur(8px)",
+          zIndex: 5,
+        }}
+      >
+        {pose.detected
+          ? `x=${pose.screenPoint?.x.toFixed(2)} y=${pose.screenPoint?.y.toFixed(2)} d=${pose.distanceScore.toFixed(3)}`
+          : "4隅マーカーを画面に入れてください"}
+      </div>
+    </div>
+  );
+}
