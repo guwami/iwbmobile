@@ -46,7 +46,7 @@ export default function PermissionGate({
             <h2 style={{ marginTop: 0 }}>カメラを開始</h2>
 
             <p style={{ color: "#ccc", lineHeight: 1.6 }}>
-              4隅マーカーを見せると、近づいた位置に付箋候補を表示します。
+              まずはカメラを起動し、その後 OpenCV とマーカー検出を有効にします。
             </p>
 
             {error && (
