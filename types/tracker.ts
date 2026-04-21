@@ -11,11 +11,16 @@ export type MarkerQuad = {
   height: number;
 };
 
+export type TrackerMode = "detecting" | "tracking" | "lost";
+
 export type ScreenPose = {
   detected: boolean;
+  mode: TrackerMode;
   corners: QuadPoint[];
-  screenPoint: QuadPoint | null;
+  screenCornersImage: QuadPoint[];
+  screenPoint: QuadPoint | null; // 0..1
   distanceScore: number;
   isNear: boolean;
   markers: MarkerQuad[];
+  trackedFeatureCount: number;
 };
