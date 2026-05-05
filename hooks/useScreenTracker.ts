@@ -1,501 +1,58 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import type { QuadPoint, ScreenPose, ScreenRect } from "@/types/tracker";
+import { useMemo } from "react";
+import { useMarkerDetection } from "@/hooks/useMarkerDetection";
+import type { GridPose } from "@/types/tracker";
 
-const EMPTY_POSE: ScreenPose = {
+const GRID_WIDTH = 90;
+const GRID_HEIGHT = 150;
+const BLOCK_STEP = 5;
+const BLOCK_COLS = GRID_WIDTH / BLOCK_STEP; // 18
+const BLOCK_ROWS = GRID_HEIGHT / BLOCK_STEP; // 30
+
+const EMPTY_POSE: GridPose = {
   detected: false,
-  mode: "detecting",
-  screenPoint: null,
-  distanceScore: 0,
-  isNear: false,
-  screenCornersImage: [],
-  trackedFeatureCount: 0,
-  screenRect: null,
+  markerNumber: null,
+  markerCenter: null,
+  displayCell: null,
+  displayNormalized: null,
 };
-
-function distance(a: QuadPoint, b: QuadPoint) {
-  return Math.hypot(a.x - b.x, a.y - b.y);
-}
-
-function polygonArea(points: QuadPoint[]) {
-  let area = 0;
-  for (let i = 0; i < points.length; i++) {
-    const j = (i + 1) % points.length;
-    area += points[i].x * points[j].y - points[j].x * points[i].y;
-  }
-  return Math.abs(area) / 2;
-}
-
-function orderPoints(points: QuadPoint[]): QuadPoint[] {
-  const sorted = [...points].sort((a, b) => a.y - b.y);
-  const top = sorted.slice(0, 2).sort((a, b) => a.x - b.x);
-  const bottom = sorted.slice(2, 4).sort((a, b) => a.x - b.x);
-  return [top[0], top[1], bottom[1], bottom[0]]; // TL, TR, BR, BL
-}
-
-function homographyArrayFromMat(mat: any): number[] {
-  const out: number[] = [];
-  for (let i = 0; i < 9; i++) out.push(mat.data64F[i]);
-  return out;
-}
-
-function applyHomographyToPoint(H: number[], p: QuadPoint): QuadPoint | null {
-  const x = p.x;
-  const y = p.y;
-  const w = H[6] * x + H[7] * y + H[8];
-  if (Math.abs(w) < 1e-8) return null;
-  return {
-    x: (H[0] * x + H[1] * y + H[2]) / w,
-    y: (H[3] * x + H[4] * y + H[5]) / w,
-  };
-}
-
-function pointsToMat(cv: any, points: QuadPoint[]) {
-  return cv.matFromArray(
-    points.length,
-    1,
-    cv.CV_32FC2,
-    points.flatMap((p) => [p.x, p.y])
-  );
-}
-
-function matToPoints(mat: any): QuadPoint[] {
-  const points: QuadPoint[] = [];
-  for (let i = 0; i < mat.rows; i++) {
-    points.push({
-      x: mat.data32F[i * 2],
-      y: mat.data32F[i * 2 + 1],
-    });
-  }
-  return points;
-}
 
 export function useScreenTracker(
   videoRef: React.RefObject<HTMLVideoElement | null>,
-  cvReady: boolean,
-  enabled: boolean
+  enabled: boolean,
+  markerNumber: number
 ) {
-  const [pose, setPose] = useState<ScreenPose>(EMPTY_POSE);
+  const detection = useMarkerDetection(videoRef, enabled);
 
-  const rafRef = useRef<number | null>(null);
-  const prevGrayRef = useRef<any>(null);
-  const prevPtsRef = useRef<any>(null);
-  const screenCornersRef = useRef<QuadPoint[]>([]);
-  const modeRef = useRef<"detecting" | "tracking">("detecting");
-  const frameCountRef = useRef(0);
+  return useMemo<GridPose>(() => {
+    if (!detection.detected || !detection.center) return EMPTY_POSE;
 
-  useEffect(() => {
-    if (!enabled || !cvReady || !window.cv) {
-      setPose(EMPTY_POSE);
-      return;
-    }
+    const safeMarker = Math.max(1, Math.min(40, markerNumber));
+    const markerCol = (safeMarker - 1) % 8;
+    const markerRow = Math.floor((safeMarker - 1) / 8);
 
-    const cv = window.cv;
-    const canvas = document.createElement("canvas");
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    const markerBlockX = markerCol * 2 + 1;
+    const markerBlockY = markerRow * 2 + 1;
 
-    if (!ctx) {
-      setPose(EMPTY_POSE);
-      return;
-    }
+    const offsetBlocksX = Math.round((detection.center.x - 0.5) * BLOCK_COLS);
+    const offsetBlocksY = Math.round((detection.center.y - 0.5) * BLOCK_ROWS);
 
-    const cleanupTracking = () => {
-      if (prevGrayRef.current) {
-        prevGrayRef.current.delete();
-        prevGrayRef.current = null;
-      }
-      if (prevPtsRef.current) {
-        prevPtsRef.current.delete();
-        prevPtsRef.current = null;
-      }
-      screenCornersRef.current = [];
-      modeRef.current = "detecting";
+    const blockX = Math.max(0, Math.min(BLOCK_COLS - 1, markerBlockX + offsetBlocksX));
+    const blockY = Math.max(0, Math.min(BLOCK_ROWS - 1, markerBlockY + offsetBlocksY));
+
+    const cellX = Math.max(0, Math.min(GRID_WIDTH - 1, blockX * BLOCK_STEP + 2));
+    const cellY = Math.max(0, Math.min(GRID_HEIGHT - 1, blockY * BLOCK_STEP + 2));
+
+    return {
+      detected: true,
+      markerNumber: safeMarker,
+      markerCenter: detection.center,
+      displayCell: { x: cellX, y: cellY },
+      displayNormalized: {
+        x: cellX / GRID_WIDTH,
+        y: cellY / GRID_HEIGHT,
+      },
     };
-
-    const buildMaskFromQuad = (gray: any, quad: QuadPoint[]) => {
-      const mask = new cv.Mat.zeros(gray.rows, gray.cols, cv.CV_8UC1);
-      const pts = cv.matFromArray(
-        4,
-        1,
-        cv.CV_32SC2,
-        quad.flatMap((p) => [Math.round(p.x), Math.round(p.y)])
-      );
-      const ptsVec = new cv.MatVector();
-      ptsVec.push_back(pts);
-      cv.fillPoly(mask, ptsVec, new cv.Scalar(255));
-      pts.delete();
-      ptsVec.delete();
-      return mask;
-    };
-
-    const detectScreenRect = (gray: any, src: any) => {
-      const blur = new cv.Mat();
-      const edges = new cv.Mat();
-      const contours = new cv.MatVector();
-      const hierarchy = new cv.Mat();
-
-      try {
-        cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
-        cv.Canny(blur, edges, 60, 180);
-
-        cv.findContours(
-          edges,
-          contours,
-          hierarchy,
-          cv.RETR_EXTERNAL,
-          cv.CHAIN_APPROX_SIMPLE
-        );
-
-        let bestRect: ScreenRect | null = null;
-
-        for (let i = 0; i < contours.size(); i++) {
-          const cnt = contours.get(i);
-          const area = cv.contourArea(cnt);
-
-          if (area < src.cols * src.rows * 0.04) {
-            cnt.delete();
-            continue;
-          }
-
-          const peri = cv.arcLength(cnt, true);
-          const approx = new cv.Mat();
-          cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
-
-          if (approx.rows === 4 && cv.isContourConvex(approx)) {
-            const points: QuadPoint[] = [];
-            for (let j = 0; j < 4; j++) {
-              const x = approx.intPtr(j, 0)[0];
-              const y = approx.intPtr(j, 0)[1];
-              points.push({ x, y });
-            }
-
-            const ordered = orderPoints(points);
-
-            const width =
-              (distance(ordered[0], ordered[1]) +
-                distance(ordered[3], ordered[2])) /
-              2;
-            const height =
-              (distance(ordered[0], ordered[3]) +
-                distance(ordered[1], ordered[2])) /
-              2;
-
-            const aspect = width / height;
-            const rectArea = polygonArea(ordered);
-            const coverage = rectArea / (src.cols * src.rows);
-
-            // 一般的なディスプレイ比にゆるく合わせる
-            const aspectOk = aspect > 1.1 && aspect < 2.4;
-            const sizeOk = coverage > 0.06;
-
-            if (aspectOk && sizeOk) {
-              if (!bestRect || rectArea > bestRect.area) {
-                bestRect = {
-                  corners: ordered,
-                  area: rectArea,
-                  width,
-                  height,
-                };
-              }
-            }
-          }
-
-          approx.delete();
-          cnt.delete();
-        }
-
-        if (!bestRect) {
-          setPose({
-            ...EMPTY_POSE,
-            mode: "detecting",
-          });
-          return;
-        }
-
-        const srcPts = pointsToMat(cv, bestRect.corners);
-        const dstPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
-          0, 0,
-          1, 0,
-          1, 1,
-          0, 1,
-        ]);
-
-        const H = cv.getPerspectiveTransform(srcPts, dstPts);
-        const HArray = homographyArrayFromMat(H);
-
-        const cameraCenter = {
-          x: src.cols / 2,
-          y: src.rows / 2,
-        };
-
-        const screenPoint = applyHomographyToPoint(HArray, cameraCenter);
-        const inside =
-          !!screenPoint &&
-          screenPoint.x >= 0 &&
-          screenPoint.x <= 1 &&
-          screenPoint.y >= 0 &&
-          screenPoint.y <= 1;
-
-        const distanceScore = bestRect.area / (src.cols * src.rows);
-        const isNear = distanceScore > 0.18;
-
-        const mask = buildMaskFromQuad(gray, bestRect.corners);
-        const corners = new cv.Mat();
-
-        cv.goodFeaturesToTrack(
-          gray,
-          corners,
-          80,
-          0.01,
-          10,
-          mask,
-          7,
-          false,
-          0.04
-        );
-
-        mask.delete();
-
-        if (corners.rows >= 8) {
-          if (prevGrayRef.current) prevGrayRef.current.delete();
-          prevGrayRef.current = gray.clone();
-
-          if (prevPtsRef.current) prevPtsRef.current.delete();
-          prevPtsRef.current = corners.clone();
-
-          screenCornersRef.current = bestRect.corners;
-          modeRef.current = "tracking";
-        } else {
-          cleanupTracking();
-        }
-
-        setPose({
-          detected: inside,
-          mode: corners.rows >= 8 ? "tracking" : "detecting",
-          screenPoint: inside ? screenPoint : null,
-          distanceScore,
-          isNear: inside && isNear,
-          screenCornersImage: bestRect.corners,
-          trackedFeatureCount: corners.rows,
-          screenRect: bestRect,
-        });
-
-        corners.delete();
-        srcPts.delete();
-        dstPts.delete();
-        H.delete();
-      } finally {
-        blur.delete();
-        edges.delete();
-        contours.delete();
-        hierarchy.delete();
-      }
-    };
-
-    const trackScreen = (gray: any, src: any) => {
-      if (
-        !prevGrayRef.current ||
-        !prevPtsRef.current ||
-        prevPtsRef.current.rows < 6 ||
-        screenCornersRef.current.length !== 4
-      ) {
-        cleanupTracking();
-        setPose({
-          ...EMPTY_POSE,
-          mode: "lost",
-        });
-        return;
-      }
-
-      const nextPts = new cv.Mat();
-      const status = new cv.Mat();
-      const err = new cv.Mat();
-
-      try {
-        cv.calcOpticalFlowPyrLK(
-          prevGrayRef.current,
-          gray,
-          prevPtsRef.current,
-          nextPts,
-          status,
-          err
-        );
-
-        const prevGood: QuadPoint[] = [];
-        const nextGood: QuadPoint[] = [];
-
-        for (let i = 0; i < status.rows; i++) {
-          if (status.data[i] === 1) {
-            prevGood.push({
-              x: prevPtsRef.current.data32F[i * 2],
-              y: prevPtsRef.current.data32F[i * 2 + 1],
-            });
-
-            nextGood.push({
-              x: nextPts.data32F[i * 2],
-              y: nextPts.data32F[i * 2 + 1],
-            });
-          }
-        }
-
-        if (nextGood.length < 6) {
-          cleanupTracking();
-          setPose({
-            ...EMPTY_POSE,
-            mode: "lost",
-          });
-          return;
-        }
-
-        const prevMat = pointsToMat(cv, prevGood);
-        const nextMat = pointsToMat(cv, nextGood);
-        const Hdelta = cv.findHomography(prevMat, nextMat, cv.RANSAC, 3);
-
-        if (Hdelta.empty()) {
-          prevMat.delete();
-          nextMat.delete();
-          Hdelta.delete();
-          cleanupTracking();
-          setPose({
-            ...EMPTY_POSE,
-            mode: "lost",
-          });
-          return;
-        }
-
-        const cornersMat = pointsToMat(cv, screenCornersRef.current);
-        const trackedCornersMat = new cv.Mat();
-        cv.perspectiveTransform(cornersMat, trackedCornersMat, Hdelta);
-        const trackedCorners = matToPoints(trackedCornersMat);
-
-        const srcPts = pointsToMat(cv, trackedCorners);
-        const dstPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
-          0, 0,
-          1, 0,
-          1, 1,
-          0, 1,
-        ]);
-
-        const HimgToScreen = cv.getPerspectiveTransform(srcPts, dstPts);
-        const HArray = homographyArrayFromMat(HimgToScreen);
-
-        const cameraCenter = {
-          x: src.cols / 2,
-          y: src.rows / 2,
-        };
-
-        const screenPoint = applyHomographyToPoint(HArray, cameraCenter);
-        const inside =
-          !!screenPoint &&
-          screenPoint.x >= 0 &&
-          screenPoint.x <= 1 &&
-          screenPoint.y >= 0 &&
-          screenPoint.y <= 1;
-
-        const rectArea = polygonArea(trackedCorners);
-        const distanceScore = rectArea / (src.cols * src.rows);
-        const isNear = distanceScore > 0.18;
-
-        if (prevGrayRef.current) prevGrayRef.current.delete();
-        prevGrayRef.current = gray.clone();
-
-        if (prevPtsRef.current) prevPtsRef.current.delete();
-        prevPtsRef.current = nextMat.clone();
-
-        screenCornersRef.current = trackedCorners;
-
-        setPose({
-          detected: inside,
-          mode: "tracking",
-          screenPoint: inside ? screenPoint : null,
-          distanceScore,
-          isNear: inside && isNear,
-          screenCornersImage: trackedCorners,
-          trackedFeatureCount: nextGood.length,
-          screenRect: {
-            corners: trackedCorners,
-            area: rectArea,
-            width: (distance(trackedCorners[0], trackedCorners[1]) +
-              distance(trackedCorners[3], trackedCorners[2])) / 2,
-            height: (distance(trackedCorners[0], trackedCorners[3]) +
-              distance(trackedCorners[1], trackedCorners[2])) / 2,
-          },
-        });
-
-        prevMat.delete();
-        nextMat.delete();
-        Hdelta.delete();
-        cornersMat.delete();
-        trackedCornersMat.delete();
-        srcPts.delete();
-        dstPts.delete();
-        HimgToScreen.delete();
-      } finally {
-        nextPts.delete();
-        status.delete();
-        err.delete();
-      }
-    };
-
-    const loop = () => {
-      const video = videoRef.current;
-
-      if (
-        !video ||
-        video.readyState < 2 ||
-        video.videoWidth === 0 ||
-        video.videoHeight === 0
-      ) {
-        rafRef.current = requestAnimationFrame(loop);
-        return;
-      }
-
-      const width = 640;
-      const height = Math.round((video.videoHeight / video.videoWidth) * width);
-
-      canvas.width = width;
-      canvas.height = height;
-      ctx.drawImage(video, 0, 0, width, height);
-
-      const src = cv.imread(canvas);
-      const gray = new cv.Mat();
-
-      try {
-        cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-
-        frameCountRef.current += 1;
-
-        const shouldRedetect =
-          modeRef.current !== "tracking" || frameCountRef.current % 45 === 0;
-
-        if (shouldRedetect) {
-          detectScreenRect(gray, src);
-        } else {
-          trackScreen(gray, src);
-        }
-      } catch (e) {
-        console.error(e);
-        cleanupTracking();
-        setPose({
-          ...EMPTY_POSE,
-          mode: "lost",
-        });
-      } finally {
-        src.delete();
-        gray.delete();
-      }
-
-      rafRef.current = requestAnimationFrame(loop);
-    };
-
-    rafRef.current = requestAnimationFrame(loop);
-
-    return () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      cleanupTracking();
-    };
-  }, [videoRef, cvReady, enabled]);
-
-  return pose;
+  }, [detection.center, detection.detected, markerNumber]);
 }
